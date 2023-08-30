@@ -1,0 +1,1723 @@
+---
+title: "SURVIVAL IN THYROID CANCER IN THE NORDIC COUNTRIES THROUGH A HALF CENTURY"
+subtitle: "Statistcial R code"
+author: "Filip Tichanek, Asta Försti, Akseli Hemminki, Kari Hemminki"
+format: 
+  html:
+    embed-resources: true
+    keep-md: true
+    toc: true
+    toc-depth: 4
+    toc-location: left
+    number-sections: true
+    number-depth: 4
+    code-fold: false
+    code-summary: "Open code"
+editor: visual
+project:
+  type: default
+  output-dir: output
+theme: sandstone
+fontsize: 13.5px
+---
+
+This page shows R code for the study [Tichanek et al.](https://www.mdpi.com/1422-0067/24/13/10689) (2023, *European Journal of Endocrinology*).
+
+**Citation**:
+
+> WILL BE ADDED
+
+[GitHub page](https://github.com/filip-tichanek/edaravonSCA1): https://github.com/filip-tichanek/nord_thyroid
+
+# Upload of packages
+
+```{r}
+rm(list = ls())
+
+suppressWarnings(suppressMessages( {
+  library(brms)
+  library(stringr)
+  library(dplyr)
+  library(bayesplot)
+  library(knitr)
+  } ) )
+```
+
+# Defining custom functions
+
+## *run_model*
+
+Function to run and save, or load, Bayesian model. The function was written according to online proposal of Paul-Christian Bürkner. Arguments are:
+
+-   *expr*: model formula
+-   *path*: path, including name of model
+-   *reuse*: indicates whether to take already existing mode with the same path (if it exists)
+
+```{r}
+    run_model <- function(expr, path, reuse = TRUE) {
+      path <- paste0(path, ".Rds")
+      if (reuse) {
+        fit <- suppressWarnings(try(readRDS(path), silent = TRUE))
+        }
+      if (is(fit, "try-error")) {
+        fit <- eval(expr)
+        saveRDS(fit, file = path)
+        }
+      fit
+    }
+```
+
+## Functions for plotting the non-linear survival trends
+
+All the functions below serve for plotting of nonlinear trends in survival and related uncertainty. All the functions below use extracted posterior samples as an input **data**. The samples represent estimation of survival over the 50 years (1971 to 2020) for specific country and type of survival (1-year, 5-years, conditional \[5y/1y\]. The time period of 50 years must be divided to sequence of 500 numbers (1/10 of a year).
+
+### *breakpo*
+
+This function serves to identify ***breaking points***, i.e. times when the annual change of survival changed with at least 95% plausibility. This was assessed by calculation of the 2nd derivation of the given survival measure and its 95% credible interval (CI); the '*breaking point*' was defined as a peak value within at least a 3-year interval where 95% CI for the 2nd derivation did not cross zero.
+
+If the 2nd derivation is plausibly non-zero for at least 3 years, the function takes the peak in the 2nd derivation (within the identified time interval) as the *breaking point* (must be between the years 1976 and 2016).
+
+Function also returns table of potential *breaking points*, if they were identified.
+
+There is one additional argument *arb* which should be zero except for the situation when the multiple breaking points overlap. The argument only move the breaking points by given value to avoid overlapping.
+
+```{r}
+breakpo <- function(data, arb){ 
+ 
+  data <- data.frame((data[,-1] - data[,-ncol(data)])*10)
+  data <- data.frame(data[,-1] - data[,-ncol(data)])
+  data = sapply(data, function(p) quantile(p, probs = c(0.025,0.975,0.5)))
+  
+  cbinl <- c()
+  x=1
+  repeat{
+    cbinl[x] <- if(
+      data[1,x]>0|data[2,x]<0){cbinl[x]=1
+    } else{cbinl[x]=0
+    }
+    
+    x = x+1
+    if(x>length(data[1,])){break}}
+  
+  cbin=1
+  x=1
+  repeat{
+    cbin[x+1]<-abs(cbinl[x]-cbinl[x+1])
+    x=x+1
+    if(x>(length(cbinl)-1)){break}}
+  
+  data <- data.frame(rbind(data,cbin));data[5,]<-yreal[c(2:499)]-0.049
+  data[6,] <- 1:498
+  data[4,51] = 1
+  data[4,449] = 1
+  
+  row.names(data)<-c("cil", "ciu", "est", "stat_change", "year", "timepoint")
+  data2 = t(data[,data[4,]==1])
+  data2 <- data.frame(data2)
+  tr <- subset(data2, 
+               data2$timepoint>50 & 
+               data2$timepoint<450)
+  y = 1
+  bp = c()
+  bx = 1
+  repeat{
+    if( (tr[y,1]<0) & (tr[y,2]<0) & (  (tr$year[y+1]-tr$year[y])>3   )  ) {
+      tr2 <- data[,tr[y,6]:(tr[y+1,6]-2)]
+      bp[bx] <- tr2[,order(tr2[3,], decreasing=F)[1]][5]
+      bx = bx+1
+    }
+    if( (tr[y,1]>0) & (tr[y,2]>0) & (  (tr$year[y+1]-tr$year[y])>3   )) {
+      tr2 <- data[,tr[y,6]:(tr[y+1,6]-2)]
+      bp[bx] <- tr2[,order(tr2[3,], decreasing=T)[1]][5]
+      bx = bx+1
+    }
+    
+    y = y+1
+    if(y>(dim(tr)[1]-1)){break}}
+  
+  y <- 1
+  
+  try(repeat{
+    lines(c(bp[y]+arb,bp[y]+ arb),
+          c(range[1],range[1]+0.025*scal),col=cola[xx], lwd=3.5,lend=1)
+    lines(c(bp[y]+arb,bp[y]+ arb),
+          c(range[2],range[2]-0.025*scal),col=cola[xx], lwd=3.5,lend=1)
+    lines(c(bp[y]+arb,bp[y]+ arb),
+          c(range[1],range[1]+0.999*scal),col=colc[xx], lwd=1,lend=1, lty=2)
+    
+    y = y+1
+    if(y>length(bp)){break}}, silent=TRUE)
+  
+ print(bp)
+ print(tr)
+ 
+ }
+```
+
+### *polyg_surv*
+
+for drawing 95% credible interval for survival indicators
+
+```{r}
+polyg_surv <- function(data){ 
+  data <- data.frame(data)
+  data <- sapply(data, 
+                 function(p) quantile(p, probs = c(0.025,0.975,0.5))
+                 )
+  cis <- c(data[1,],rev(data[2,]))
+  x <- c(yreal[1:500],yreal[500:1])
+  cis[cis<range[1]] < -range[1]
+  cis[cis>range[2]] <- range[2]
+  polygon(x, cis, border=NA, col=colb[xx], xpd=F)}
+```
+
+### *surv_fit*
+
+Fit curve of survival trend over the 50 years. **Solid lines** imply that that the curve is increasing or decreasing with at least 95% plausibility (95% credible interval for 1st derivation of estimated survival does not cross zero) for at least 5 years. Dashed lines show otherwise (no detectable change in the survival)
+
+```{r}
+surv_fit <- function(data){
+  data = data.frame(data)
+  cis = data.frame((data[,-1] - data[,- ncol(data)])*10)
+  cis =sapply(cis, function(p) quantile(p, probs = c(0.025,0.975)))
+  est=sapply(data, function(p) quantile(p, probs = c(0.5)))
+  dat35 = cis
+  cbinl = c()
+  x = 1
+  repeat{
+    cbinl[x] <- if(dat35[1,x]>0|dat35[2,x]<0){
+      cbinl[x]=1} else{cbinl[x]=0
+      }
+    x = x+1
+    if(x>length(dat35[1,])){break}
+    }
+  cbin = 1
+  x = 1
+  repeat{
+    cbin[x+1] <- abs(cbinl[x]-cbinl[x+1])
+    x=x+1
+    if(x > (length(cbinl)-1)){break}
+    }
+  dat35 <- data.frame(rbind(dat35, cbin))
+  dat35[4,] <- yreal[c(2:500)]-0.049
+  dat35[5,] <- 1:499
+  row.names(dat35) <- c("cil","ciu","stat_change","year","timepoint")
+  dat35[3, 499] = 1
+  dat352 = t(dat35[,dat35[3,]==1])
+  dat352 <- data.frame(dat352)
+  tr <- dat352
+  y=1
+  yreal = seq(1971, 2020, length=500)
+  repeat{
+    if((((tr[y,1]<0)&
+         (tr[y,2])<0))|
+       (((tr[y,1]>0)&
+         (tr[y,2])>0))&
+       (tr[y+1,4]-tr[y,4])>5)
+    {lines(yreal[tr[y,5]:tr[y+1,5]],
+           est[tr[y,5]:tr[y+1,5]],
+           lwd=1.9, col=cola[xx],lend=1)}
+    
+    y <- y+1
+    if(y>dim(tr)[1]-1){break}}
+  
+  lines(yreal[1:500], est, lwd=1, col=cola[xx],lty=2, lend=1)}
+```
+
+### *polyg_slope*
+
+Draws 95% credible interval for slope of the survival trend (1st derivation of the estimated survival trend)
+
+```{r}
+polyg_slope <- function(data){ 
+  x <- c(yreal[1:499],yreal[499:1])
+  data <- data.frame((data[,-1] - data[,-ncol(data)]))*10
+  data = sapply(data, 
+                function(p) quantile(p, probs = c(0.025,0.975,0.5)))
+  cis <- c(data[1,],rev(data[2,]))
+  cis[cis<range[1]] <- range[1]
+  cis[cis>range[2]] <- range[2]
+  polygon(x, cis, border=NA, col=colb[xx])}
+```
+
+### *slope_fit*
+
+Fit curve of **slope** (i.e., the **magnitude of the change**) of the survival trend over the 50 years. Solid lines imply that that the curve is increasing or decreasing with at least 95% plausibility (95% credible interval for 2st derivation of estimated survival does not cross zero) for at least 3 years. Dashed lines show otherwise (no detectable change in the slope of the survival trend)
+
+```{r}
+slope_fit<-function(data){
+  data = data.frame((data[,-1] - data[,-ncol(data)])*10)
+  dar2 <- sapply(data, function(p) quantile(p, probs = c(0.5)))
+  data <- data.frame(data[,-1] - data[,-ncol(data)])
+  data = sapply(data, function(p) quantile(p, probs = c(0.025,0.975,0.5)))
+  
+  cbinl <- c()
+  x=1
+  
+  repeat{
+    cbinl[x] <- if(
+      data[1,x]>0|data[2,x]<0){
+      cbinl[x]=1}else{cbinl[x]=0
+      }
+    
+    x <- x+1
+    if(x>length(data[1,])){break}}
+  
+  cbin = 1
+  x = 1
+  repeat{
+    cbin[x+1] <- abs(cbinl[x]-cbinl[x+1])
+    x = x + 1
+    if(x>(length(cbinl)-1)){break}}
+  
+  data <- data.frame(rbind(data,cbin))
+  data[5,] <- yreal[c(2:499)]-0.049
+  data[6,] <- 1:498
+  
+  row.names(data) <- c("cil","ciu","est","stat_change","year","timepoint")
+  data[4,450] <- 1
+  data[4,50] <- 1
+  
+  data = data[,50:450]
+  lines(yreal[1:499], dar2, lwd=1, col=cola[xx],lty=2,lend=1)
+  data2 = (t(data[,data[4,]==1]))
+  
+  data2 <- data.frame(data2)
+  tr <- data2
+  y = 1
+  yreal = seq(1971, 2020, length=498)
+  repeat{
+    if(((((tr[y,1]<0)&
+          (tr[y,2])<0))|
+        (((tr[y,1]>0)&
+          (tr[y,2])>0)))&
+       (tr[y+1,5]-tr[y,5])>3)
+    {lines(yreal[tr[y,6]:tr[y+1,6]],
+           dar2[tr[y,6]:tr[y+1,6]],
+           lwd=1.9, col=cola[xx], lend=1)
+      }
+    y <- y+1
+    if(y>dim(tr)[1]-1){break}}
+  }
+```
+
+# Incidence and mortality
+
+## Data upload and wrangling
+
+```{r}
+# setting parameters for smoothing
+spar = 0.3
+knot = 12
+
+# colors ---------------------------------------------------------
+
+cola <- c(
+  rgb(1, 0.1, 0.1, alpha = 1),
+  rgb(0.1, 0.1, 1, alpha = 1),
+  rgb(0, 0.6, 0.3, alpha = 1),
+  rgb(0.7, 0.7, 0.1, alpha = 1))
+
+colb<-c(
+  rgb(1, 0.1, 0.1, alpha = 0.2),
+  rgb(0.1, 0.1, 1, alpha = 0.2),
+  rgb(0, 0.6, 0.3, alpha = 0.2),
+  rgb(0.7, 0.7, 0.1, alpha = 0.2))
+
+colc<-c(
+  rgb(1, 0.1, 0.1, alpha = 0.8),
+  rgb(0.1, 0.1, 1, alpha = 0.8),
+  rgb(0, 0.6, 0.3, alpha = 0.8),
+  rgb(0.7, 0.7, 0.1, alpha = 0.8))
+
+
+# thyroid data
+thyroid_inc_mor <- read.csv("source_data/inc_mor_thyroid.csv",sep=",")
+colnam <- thyroid_inc_mor[,1]
+
+thyroid_inc_mor <- data.frame(t(thyroid_inc_mor))[-1, ]
+colnames(thyroid_inc_mor) <- colnam
+thyroid_inc_mor$year <- 1943:2020
+
+### Subseting years 1961-2020
+thyroid_inc_mor <- thyroid_inc_mor[thyroid_inc_mor$year > 1960, ]
+thyroid_inc_mor[1:4, 1:4]
+
+### Removing space character and converting characters to numbers
+for(x in 1:dim(thyroid_inc_mor)[2]){
+thyroid_inc_mor[,x] <- str_trim(thyroid_inc_mor[,x])
+thyroid_inc_mor[,x] <- as.numeric(thyroid_inc_mor[,x]) }
+summary(thyroid_inc_mor) 
+```
+
+## Incidence and mortaility plotting
+
+```{r, fig.width = 5.7, fig.height = 6.4}
+#| fig-cap: 
+#|   - "Incidence (a-b) and mortality (c-d) in thyroid. The figure was created in R using data from Nordcan. Lines were smoothed via cubic smoothing spline."
+
+## General setting and titles of plots
+
+m <- matrix(c(9 ,1, 2,
+              3 ,5, 6,
+              4, 7, 8), nrow = 3, ncol =3 ,byrow = TRUE)
+layout(mat = m,heights = c(0.04,0.96/2,0.96/2),
+       widths = c(0.08,0.95/2,0.95/2))
+par(mgp=c(1.6,0.8,0))
+par(mar=c(0,0,0,0))
+
+plot(NULL, axes=FALSE,xlab="",ylab="",xlim=c(-1,1),ylim=c(-0.85,0.85))
+text(0.05,-0.,"Males",cex=1.8,font=3,xpd=TRUE)
+
+plot(NULL, axes=FALSE,xlab="",ylab="",xlim=c(-1,1),ylim=c(-0.85,0.85))
+text(0.05,-0.,"Females",cex=1.8,font=3,xpd=TRUE)
+
+par(mar=c(1.8,0,0,0))
+plot(NULL, axes=FALSE,xlab="",ylab="",xlim=c(-1,1),ylim=c(-0.85,0.85))
+text(-0.5,0,"Incidence per 100,000 (ASR - World)",cex=1.4,xpd=TRUE,srt=90)
+
+plot(NULL, axes=FALSE,xlab="",ylab="",xlim=c(-1,1),ylim=c(-0.85,0.85))
+text(-0.5,0,"Mortality per 100,000 (ASR - World)",cex=1.4,xpd=TRUE,srt=90)
+
+
+
+## Plot of thyroid cancer ----------------
+par(mgp=c(0.1,0.8,0))
+par(mar=c(2,0,0,0))
+
+range<-c(0,12);scal<-range[2]-range[1]
+xrange<-c(1961,2020)
+
+plot(NULL,xlim=xrange,ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(xrange[1],range[2],xrange[2],range[1],col="grey90",border=NA)
+
+x = range[1]
+repeat{
+  lines(c(xrange[1],xrange[2]),c(x,x),col="white")
+  x=x+2;if(x>range[2]){break}}
+
+x<- round(xrange[1]+5,-1)
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white")
+  x=x+10;if(x>2020){break}}
+
+data = thyroid_inc_mor
+
+for (xx in 1:4){
+  smoothingSpline = smooth.spline(data$year, data[,xx], spar=spar, nknots=knot)
+  lines(smoothingSpline,col=colc[xx],lty=1,lwd=2,lend=1)
+}
+
+
+axis(2,las=2,cex.axis=1.4, at = seq(range[1], range[2], by=2)
+        , pos = xrange[1], tck = -0.02)
+axis(2,las = 2, cex.axis = 1.4, at = c(range[1], range[2]), pos=xrange[1], tck = -0.025)
+
+axis(side=1,las=1, cex.axis=1.4, 
+     at = c(seq(round(xrange[1] + 5, -1), 2020, by=10)), pos=range[1], tck= -0.02, 
+     labels = c(rep("", length((seq(round(xrange[1]+5,-1),2020,by=10))
+       ) ) )
+     )
+
+axis(side=1, las=1, cex.axis=1.4,
+     at = c(seq(round(xrange[1]+5,-1), 2020, by = 20)), pos = range[1],
+     tck= -0.02)
+
+
+lines(c(xrange[1], xrange[2]), c(range[1], range[1]))
+text(1964, range[2]-0.05*scal, "a", cex = 2.5)
+
+xx=1;yy=range[1]+scal*0.75
+rect(2000,yy+0.035*scal,2019,yy-0.21*scal,col="white",border="grey50",lwd=0.8)
+repeat{
+  lines(c(2001,2004),c(yy,yy),lwd=12,col=cola[xx],lend=1)
+  xx<-xx+1;yy=yy-(scal*0.058);if(xx>4){break}}
+
+xx = 1;
+yy = range[1] + scal*0.75
+text(2011.5,yy,"Denmark",col=cola[xx],cex=1.25);xx=xx+1;yy=yy-(scal*0.058)
+text(2011.5,yy,"Finland",col=cola[xx],cex=1.25);xx=xx+1;yy=yy-(scal*0.058)
+text(2011.5,yy,"Norway",col=cola[xx],cex=1.25);xx=xx+1;yy=yy-(scal*0.058)
+text(2011.4,yy,"Sweden",col=cola[xx],cex=1.25);xx=xx+1;yy=yy-(scal*0.058)
+
+# females
+plot(NULL,xlim=xrange,ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(xrange[1],range[2],xrange[2],range[1],col="grey90",border=NA)
+
+x<-range[1]
+repeat{
+  lines(c(xrange[1],xrange[2]),c(x,x),col="white")
+  x=x+2;if(x>range[2]){break}}
+
+x<- round(xrange[1]+5,-1)
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white")
+  x=x+10;if(x>2020){break}}
+
+for(xx in 5:8){
+  smoothingSpline = smooth.spline(data$year, data[,xx], spar=spar, nknots=knot)
+  lines(smoothingSpline, col=colc[xx-4],lty=1, lwd=2, lend=1)
+  }
+
+axis(2,las=2,cex.axis=1.4,at=seq(range[1],range[2],by=2)
+     ,pos=xrange[1],tck= -0.02, labels=c(rep("",length(seq(range[1],range[2],by=2)) )) )
+
+axis(side=1,las=1,cex.axis=1.4,at=c(seq(round(xrange[1]+5,-1),2020,by=10)),pos=range[1],
+     tck= -0.02,labels=c(rep("",length((seq(round(xrange[1]+5,-1),2020,by=10))))))
+
+axis(side=1,las=1,cex.axis=1.4,at=c(seq(round(xrange[1]+5,-1),2020,by=20)),pos=range[1],
+     tck= -0.02)
+lines(c(xrange[1],xrange[2]),c(range[1],range[1]))
+text(1964,range[2]-0.05*scal,"b",cex=2.5)
+
+
+
+# mortality males
+range = c(0,1.5)
+scal = range[2]-range[1]
+xrange = c(1961, 2020)
+
+plot(NULL,xlim=xrange,ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(xrange[1],range[2],xrange[2],range[1],col="grey90",border=NA)
+x = range[1]
+repeat{
+  lines(c(xrange[1],xrange[2]),c(x,x),col="white")
+  x = x+0.5
+  if(x>range[2]){break}}
+
+x<- round(xrange[1]+5,-1)
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white")
+  x=x+10;if(x>2020){break}}
+
+
+for(xx in 9:12){
+  smoothingSpline = smooth.spline(data$year, data[,xx], spar=spar, nknots=knot)
+  lines(smoothingSpline,col=colc[xx-8],lty=1,lwd=2,lend=1)
+  }
+
+axis(2,las=2,cex.axis=1.4,at=seq(range[1],range[2],by=0.5)
+     ,pos=xrange[1],tck= -0.02 )
+
+axis(side=1,las=1,cex.axis=1.4,at=c(seq(round(xrange[1]+5,-1),2020,by=10)),pos=range[1],
+     tck= -0.02,labels=c(rep("",length((seq(round(xrange[1]+5,-1),2020,by=10))))))
+
+axis(side=1,las=1,cex.axis=1.4,at=c(seq(round(xrange[1]+5,-1),2020,by=20)),pos=range[1],
+     tck= -0.02)
+lines(c(xrange[1],xrange[2]),c(range[1],range[1]))
+text(1964,range[2]-0.05*scal,"c",cex=2.5)
+
+
+# mortality females
+plot(NULL,xlim=xrange,ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+
+rect(xrange[1],range[2],xrange[2],range[1],col="grey90",border=NA)
+x = range[1]
+
+repeat{
+  lines(c(xrange[1],xrange[2]),c(x,x),col="white")
+  x=x+0.5;if(x>range[2]){break}}
+
+x<- round(xrange[1]+5,-1)
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white")
+  x=x+10
+  if(x>2020){break}}
+
+for(xx in 12:16){
+  smoothingSpline = smooth.spline(data$year, data[,xx], spar=spar, nknots=knot)
+  lines(smoothingSpline,col=colc[xx-12],lty=1,lwd=2,lend=1)
+  }
+
+axis(2,las=2,cex.axis=1.4,at=seq(range[1],range[2],by=0.5)
+     ,pos=xrange[1],tck= -0.02, labels=c(rep("",length(seq(range[1],range[2],by=0.5)) )) )
+
+axis(side=1,las=1,cex.axis=1.4,at=c(seq(round(xrange[1]+5,-1),2020,by=10)),pos=range[1],
+     tck= -0.02,labels=c(rep("",length((seq(round(xrange[1]+5,-1),2020,by=10))))))
+
+axis(side=1,las=1,cex.axis=1.4,at=c(seq(round(xrange[1]+5,-1),2020,by=20)),pos=range[1],
+     tck= -0.02)
+lines(c(xrange[1],xrange[2]),c(range[1],range[1]))
+text(1964,range[2]-0.05*scal,"d",cex=2.5)
+
+```
+
+# Survival trends
+
+This code aim to time trends in the thyroid cancers using Bayesian Generalized Additive Models. Data were downloaded from [NORDCAN](https://nordcan.iarc.fr/en) website.
+
+```{r}
+cola<-c(
+  rgb(1, 0, 0, alpha=1),
+  rgb(0.2,0.2,1,alpha=1),
+  rgb(0, 0.7, 0,alpha=1),
+  rgb(0.7,0.7,0.1,alpha=1))
+
+alp=0.18;colb<-c(
+  rgb(1, 0, 0, alpha=alp),
+  rgb(0.2, 0.2, 1, alpha=alp),
+  rgb(0, 0.9, 0,alpha=alp),
+  rgb(0.7,0.7,0.1,alpha=alp))
+
+colc<-c(
+  rgb(1,0,0,alpha=0.8),
+  rgb(0.2,0.2,1,alpha=0.8),
+  rgb(0, 0.9, 0,alpha=0.8),
+  rgb(0.7,0.7,0.1,alpha=0.8))
+```
+
+### Data upload
+
+```{r}
+thyroid_1y <- read.csv("source_data/thyroid_1y.csv", sep=";")
+thyroid_5y <- read.csv("source_data/thyroid_5y.csv", sep=";")
+```
+
+### Data wrangling
+
+```{r}
+
+thyroid_1y_est <- data.frame(thyroid_1y[, 1])
+for (x in 2:9){
+  thyroid_1y_est[,x] <- str_sub(thyroid_1y[, x], 1, 4) }
+
+for (x in 10:17){
+  thyroid_1y_est[,x] <- str_sub(thyroid_1y[, x-8], 6, 9) }
+
+thyroid_5y_est <- data.frame(thyroid_5y[,1])
+for (x in 2:9){thyroid_5y_est[,x]  <-  str_sub(thyroid_5y[,x], 1, 4) }
+for (x in 10:17){thyroid_5y_est[,x]  <-  str_sub(thyroid_5y[,x-8], 6, 9) }
+
+thyroid <- (data.frame(unlist(thyroid_1y_est[,2:9])));colnames(thyroid) <- "surv_1y"
+thyroid$cil_1y <- as.numeric(unlist(thyroid_1y_est[,10:17]))
+thyroid$surv_5y <- as.numeric(unlist(thyroid_5y_est[,2:9]))
+thyroid$cil_5y <- as.numeric(unlist(thyroid_5y_est[,10:17]))
+thyroid$year <- rep(seq(1973,2018,by=5),8)
+thyroid$sex <- c(rep("Males",40),rep("Females",40))
+thyroid$country <- c(rep(c(rep("Denmark",10), rep("Finland",10), rep("Norway",10),
+                        rep("Sweden",10)),2))
+thyroid$shou <- c(rep(c(rep("den_mal_",10), rep("fin_mal_",10), rep("nor_mal_",10),
+                     rep("swe_mal_",10), rep("den_fem_",10), rep("fin_fem_",10),
+                     rep("nor_fem_",10), rep("swe_fem_",10)),1))
+thyroid$group <- interaction(thyroid$country,thyroid$sex)
+thyroid$years10cen <- (thyroid$year-1995.5)/10
+thyroid$surv_1y <- as.numeric(thyroid$surv_1y)
+thyroid$surv_5y <- as.numeric(thyroid$surv_5y)
+thyroid$cil_1y <- as.numeric(thyroid$cil_1y)
+thyroid$cil_5y <- as.numeric(thyroid$cil_5y)
+thyroid$se_1y <- (thyroid$surv_1y-thyroid$cil_1y)/1.96
+thyroid$se_5y <- (thyroid$surv_5y-thyroid$cil_5y)/1.96
+thyroid$surv_cond <- (thyroid$surv_5y/thyroid$surv_1y)*100
+summary(thyroid)
+```
+
+## Modelling of survival trends
+
+### Prior probabilities specification
+
+```{r}
+prior_group <- c(
+set_prior("normal(0,30)", class = "b", coef = "groupFinland.Males"),
+set_prior("normal(0,30)", class = "b", coef = "groupNorway.Males"),
+set_prior("normal(0,30)", class = "b", coef = "groupSweden.Males"),
+set_prior("normal(0,30)", class = "b", coef = "groupDenmark.Males"),
+set_prior("normal(0,30)", class = "b", coef = "groupNorway.Females"),
+set_prior("normal(0,30)", class = "b", coef = "groupFinland.Females"),
+set_prior("normal(0,30)", class = "b", coef = "groupSweden.Females"))
+```
+
+### Fitting models of thyroid survival
+
+```{r}
+thyroid_1y_model <- run_model(
+  brm(surv_1y|se(se_1y) ~ group + s(years10cen, by=group, k=5),
+      family="Gaussian", 
+      prior = prior_group,
+      data = thyroid, seed = 17,
+      iter = 7000, warmup = 2000, chains = 2, cores = 1,
+      control = list(adapt_delta = 0.98),
+      save_pars = save_pars(all = TRUE)),
+  'brm/thyroid_1y_model', reuse = TRUE)
+
+thyroid_5y_model <- run_model(
+  brm(surv_5y|se(se_5y) ~ group + s(years10cen, by=group, k=5),
+      family="Gaussian", 
+      prior = prior_group,
+      data = thyroid, seed = 17,
+      iter = 7000, warmup = 2000, chains = 2, cores = 1,
+      control = list(adapt_delta = 0.98),
+      save_pars = save_pars(all = TRUE)),
+  'brm/thyroid_5y_model', reuse = TRUE)
+```
+
+### Diagnostics
+
+Checking effective sample size of posterior samples, convergence of the models and posterior predictive check (PPC)
+
+In general, diagnostics uses:
+
+-   
+
+    (i) *trace plot*: shows how well are chains of posterior sampling mixed, whether they are issues with convergence and related autocorrelation of samples. We will show the trace plot for only few parameters (intercept + group effect)
+
+-   
+
+    (ii) *summary(model)*: the columns of intereste are ***Rhat*** (when = 1, model converged well), and columns ***Tail_ESS*** and ***Bulk_ESS*** which should never go under 1,000 and should be mostly above 2,000.
+
+-   
+
+    (iii) ***pp_check*** : graphical tools to explore how well the model predicts real data, as thoroughly described by Gelman [here](http://www.stat.columbia.edu/~gelman/book/). Ideally, there should not be strong discrepancy between the model prediction and the distribution of the real dataset.
+
+You can use also *plot(model)* to see convergence of chains and to explore posterior distribution of parameters, estimated via the models
+
+Finally, we will also use a function *prior_summary* to explore the prior probabilities set
+
+Thyroid 1y model
+
+```{r}
+#| warning: false
+#| error: false
+
+## MCMC trace plot
+mcmc_trace(thyroid_1y_model, pars = c(
+  'b_Intercept',
+  'b_groupFinland.Females',
+  'b_groupNorway.Females',
+  'b_groupNorway.Females' ,
+  'b_groupSweden.Females',
+  'b_groupDenmark.Males',
+  'b_groupFinland.Males',
+  'b_groupNorway.Males',
+  'b_groupNorway.Males'))
+
+## model summary
+summary(thyroid_1y_model)
+
+## PPC
+pp_check(thyroid_1y_model, type='dens_overlay', ndraws = 100)
+pp_check(thyroid_1y_model, type='scatter_avg') 
+pp_check(thyroid_1y_model, type="stat_2d", stat = c("max", "min"), ndraws=100)
+pp_check(thyroid_1y_model, type="stat_2d", stat = c("mean", "sd"), ndraws=100)
+
+## summary of priors
+prior_summary(thyroid_1y_model)
+```
+
+Everything seems to be fine: For all parameters, *Rhat* = 1, *ESS* is above 2000 and PPC show relatively good correspondence between the predicted and the real data. Only scatter plot shows tendency smaller and smaller error with increasing fit, but this is a minor issue (may model with logit link, e.g. beta model, be useful for such data in future??)
+
+Thyroid 5y model
+
+```{r}
+#| warning: false
+#| error: false
+
+## MCMC trace plot
+mcmc_trace(thyroid_5y_model, pars = c(
+  'b_Intercept',
+  'b_groupFinland.Females',
+  'b_groupNorway.Females',
+  'b_groupNorway.Females' ,
+  'b_groupSweden.Females',
+  'b_groupDenmark.Males',
+  'b_groupFinland.Males',
+  'b_groupNorway.Males',
+  'b_groupNorway.Males'))
+
+## model summary
+summary(thyroid_5y_model)
+
+## PPC
+pp_check(thyroid_5y_model, type='dens_overlay', ndraws = 100)
+pp_check(thyroid_5y_model, type='scatter_avg') 
+pp_check(thyroid_5y_model, type="stat_2d", stat = c("max", "min"), ndraws=100)
+pp_check(thyroid_5y_model, type="stat_2d", stat = c("mean", "sd"), ndraws=100)
+
+## summary of priors
+prior_summary(thyroid_5y_model)
+```
+
+Everything seem fine again
+
+## Extraction of posterior samples
+
+It will be used to visualize the predictions of the models jointly with showing uncertainty of model estimations
+
+```{r}
+## thyroid posterior extraction ---------------------------------------------------
+yreal <- seq(1971,2020,length=500)
+first <- expand.grid(years10cen = ((yreal-1995.5)/10),
+                     group = c(
+                      'Denmark.Females',
+                      'Finland.Females',
+                      'Norway.Females',
+                      'Sweden.Females',
+                      'Denmark.Males',
+                      'Finland.Males',
+                      'Norway.Males',
+                      'Sweden.Males'
+                      ),
+                     y = 0)
+
+ms_1y <- posterior_smooths(thyroid_1y_model,
+                           smooth="s(years10cen,by=group,k=5)",
+                           newdata = first)
+
+post_fix <- as.data.frame(thyroid_1y_model, 
+                          variable = c(
+                            "b_Intercept",
+                            "b_groupFinland.Females",
+                            "b_groupNorway.Females", 
+                            "b_groupSweden.Females",
+                            "b_groupDenmark.Males",
+                            "b_groupFinland.Males",
+                            "b_groupNorway.Males",
+                            "b_groupSweden.Males"))
+
+fixef(thyroid_1y_model)
+post_thyroid_den_fem_1y<-ms_1y[,1:500]     +post_fix[,1]
+post_thyroid_fin_fem_1y<-ms_1y[,501:1000]  +post_fix[,1]+post_fix[,2]
+post_thyroid_nor_fem_1y<-ms_1y[,1001:1500] +post_fix[,1]+post_fix[,3]
+post_thyroid_swe_fem_1y<-ms_1y[,1501:2000] +post_fix[,1]+post_fix[,4]
+post_thyroid_den_mal_1y<-ms_1y[,2001:2500] +post_fix[,1]+post_fix[,5]
+post_thyroid_fin_mal_1y<-ms_1y[,2501:3000] +post_fix[,1]+post_fix[,6]
+post_thyroid_nor_mal_1y<-ms_1y[,3001:3500] +post_fix[,1]+post_fix[,7]
+post_thyroid_swe_mal_1y<-ms_1y[,3501:4000] +post_fix[,1]+post_fix[,8]
+
+post_fix<-as.data.frame(thyroid_5y_model, 
+                        variable = c(
+                          "b_Intercept",
+                          "b_groupFinland.Females",                                     
+                          "b_groupNorway.Females",
+                          "b_groupSweden.Females",
+                          "b_groupDenmark.Males",
+                          "b_groupFinland.Males",
+                          "b_groupNorway.Males",
+                          "b_groupSweden.Males"))
+
+ms_5y <- posterior_smooths(thyroid_5y_model,
+                           smooth="s(years10cen,by=group,k=5)",
+                           newdata = first)
+
+post_thyroid_den_fem_5y<-ms_5y[,1:500]     +post_fix[,1]
+post_thyroid_fin_fem_5y<-ms_5y[,501:1000]  +post_fix[,1]+post_fix[,2]
+post_thyroid_nor_fem_5y<-ms_5y[,1001:1500] +post_fix[,1]+post_fix[,3]
+post_thyroid_swe_fem_5y<-ms_5y[,1501:2000] +post_fix[,1]+post_fix[,4]
+post_thyroid_den_mal_5y<-ms_5y[,2001:2500] +post_fix[,1]+post_fix[,5]
+post_thyroid_fin_mal_5y<-ms_5y[,2501:3000] +post_fix[,1]+post_fix[,6]
+post_thyroid_nor_mal_5y<-ms_5y[,3001:3500] +post_fix[,1]+post_fix[,7]
+post_thyroid_swe_mal_5y<-ms_5y[,3501:4000] +post_fix[,1]+post_fix[,8]
+
+post_thyroid_den_fem_cond<-(post_thyroid_den_fem_5y/post_thyroid_den_fem_1y)*100
+post_thyroid_den_mal_cond<-(post_thyroid_den_mal_5y/post_thyroid_den_mal_1y)*100
+post_thyroid_fin_fem_cond<-(post_thyroid_fin_fem_5y/post_thyroid_fin_fem_1y)*100
+post_thyroid_fin_mal_cond<-(post_thyroid_fin_mal_5y/post_thyroid_fin_mal_1y)*100
+post_thyroid_nor_fem_cond<-(post_thyroid_nor_fem_5y/post_thyroid_nor_fem_1y)*100
+post_thyroid_nor_mal_cond<-(post_thyroid_nor_mal_5y/post_thyroid_nor_mal_1y)*100
+post_thyroid_swe_fem_cond<-(post_thyroid_swe_fem_5y/post_thyroid_swe_fem_1y)*100
+post_thyroid_swe_mal_cond<-(post_thyroid_swe_mal_5y/post_thyroid_swe_mal_1y)*100
+
+```
+
+## Visualisations
+
+```{r, fig.width = 9, fig.height = 6.9}
+#| warning: false
+#| error: false
+#| fig-cap: 
+#|   - "Relative 1- , 5/1- and 5-year survival for thyroid cancer in DK men (a) and women (e), in FI men (b) and women (f), in NO men (c) and women (g) and in SE men (d) and women (h). The major difference in survival plots were for the FI 5/1- and 5-year curves which started at a lower level compared to the other countries. However, the FI 5/1- and 5-year survival developed very fast until 1990. The DK curves were almost linear but for NO and SE a slow period of improvement fell around year 2000. In all countries, 5/1- and 5-year survival developed well after year 2010 and for DK men and all women these plots almost met 1-year survival plots."
+
+
+# Plotting 1 - survival trends ----------------
+
+
+## general setting -------------
+m= matrix(c( 25, 1, 2, 3, 4
+              ,5, 9,13,17,21
+              ,6,10,14,18,22
+              ,7,11,15,19,23
+              ,8,12,16,20,24), nrow = 5, ncol=5, byrow = TRUE)
+layout(mat = m,heights = c(0.03,0.6/2,0.37/2,0.6/2,0.37/2),
+       widths = c(0.04,rep(0.96/4,4)))
+par(mgp=c(1.6,0.62,0))
+par(mar=c(0,0,0,0))
+
+
+plot(NULL, axes=FALSE,xlab="",ylab="",xlim=c(-1,1),ylim=c(-0.85,0.85))
+text(0,-0.2,"Denmark",cex=1.6,font=3,xpd=TRUE)
+
+plot(NULL, axes=FALSE,xlab="",ylab="",xlim=c(-1,1),ylim=c(-0.85,0.85))
+text(0,-0.2,"Finland",cex=1.6,font=3,xpd=TRUE)
+
+plot(NULL, axes=FALSE,xlab="",ylab="",xlim=c(-1,1),ylim=c(-0.85,0.85))
+text(0,-0.2,"Norway",cex=1.6,font=3,xpd=TRUE)
+
+plot(NULL, axes=FALSE,xlab="",ylab="",xlim=c(-1,1),ylim=c(-0.85,0.85))
+text(0,-0.2,"Sweden",cex=1.6,font=3,xpd=TRUE)
+
+
+
+range_b<-c(40,110);scal_b<-range_b[2]-range_b[1]
+range_c<-c(0,1.2);scal_c<-range_c[2]-range_c[1]
+
+range<-range_b;scal=scal_b
+plot(NULL, axes=FALSE,xlab="",ylab="",xlim=c(-1,1),
+     ylim=c(range_b[1],range_b[2]))
+text(0,range_b[1]+scal_b*0.5,"Relative survival (%) in males", cex=1.35,srt=90)
+
+
+range<-range_c;scal=scal_c
+par(mar=c(2.5,0,0,0))
+plot(NULL, axes=FALSE,xlab="",ylab="",xlim=c(-1,1),
+     ylim=c(range_c[1],range_c[2]))
+text(0,range_c[1]+scal_c*0.5,expression(paste(delta, " (survival)")),
+     cex=1.35,srt=90)
+
+range<-range_b;scal=scal_b
+par(mar=c(0,0,0,0))
+plot(NULL, axes=FALSE,xlab="",ylab="",xlim=c(-1,1),
+     ylim=c(range_b[1],range_b[2]))
+text(0,range_b[1]+scal_b*0.5,"Relative survival (%) in females", cex=1.4,srt=90)
+
+
+range<-range_c;scal=scal_c
+par(mar=c(2.5,0,0.2,0))
+plot(NULL, axes=FALSE,xlab="",ylab="",xlim=c(-1,1),
+     ylim=c(range_c[1],range_c[2]))
+text(0,range_c[1]+scal_c*0.5,expression(paste(delta, " (survival)")),
+     cex=1.4,srt=90)
+
+
+### DEN  
+#### males --------------
+range<-range_b;scal=scal_b
+par(mgp=c(1.6,0.4,0))
+par(mar=c(0,1.4,0,0.3))
+
+plot(NULL,xlim=c(1971,2020),ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(1971,range[2],2020,range[1],col="grey90",border=NA)
+x<-10
+repeat{
+  lines(c(1971,2020),c(x,x),col="white",lwd=0.7)
+  x=x+10;if(x>100){break}}
+lines(c(1971,2020),c(50,50),col="white",lwd=1.7)
+
+
+x<-1980
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white",lwd=0.7)
+  x=x+10;if(x>2020){break}}
+
+# breaking points identification
+xx=1
+breakpo(post_thyroid_den_mal_1y,0)
+xx=xx+1
+breakpo(post_thyroid_den_mal_cond,0)
+xx=xx+1
+breakpo(post_thyroid_den_mal_5y,0)
+
+# 95% credible interval for survival
+xx=1
+polyg_surv(post_thyroid_den_mal_1y);xx=xx+1
+polyg_surv(post_thyroid_den_mal_cond);xx=xx+1
+polyg_surv(post_thyroid_den_mal_5y)
+
+# data points of estimated survival
+xx=1
+points(thyroid[thyroid$shou=="den_mal_",]$surv_1y~thyroid[thyroid$shou=="den_mal_",]$year
+       ,pch=17,col=colc[xx],cex=1);xx=xx+1
+points(thyroid[thyroid$shou=="den_mal_",]$surv_cond~thyroid[thyroid$shou=="den_mal_",]$year
+       ,pch=17,col=colc[xx],cex=1);xx=xx+1
+points(thyroid[thyroid$shou=="den_mal_",]$surv_5y~thyroid[thyroid$shou=="den_mal_",]$year
+       ,pch=17,col=colc[xx],cex=1)
+
+tckk=-0.016
+# fitted lines for survival
+xx=1
+surv_fit(post_thyroid_den_mal_1y);xx=xx+1
+surv_fit(post_thyroid_den_mal_cond);xx=xx+1
+surv_fit(post_thyroid_den_mal_5y);xx=xx+1
+
+axis(2,las=2,cex.axis=1.3,at=seq(range[1],range[2],by=10),
+     labels=c(rep("",length(seq(range[1],range[2],by=10)))),pos=1971,tck=tckk)
+
+axis(2,las=2,cex.axis=1.3,at=c(seq(range[1],range[2],by=20)),pos=1971,tck=tckk)
+
+axis(side=1,las=1,cex.axis=1.3,at=c(seq(1980,2020,by=10)),pos=range[1],
+     labels = c(rep("",5)),tck=tckk)
+lines(c(1971,2020),c(range[1],range[1]))
+
+# legend
+xpo=-7
+ypo=0.25
+xx=1;yy=range[1]+scal*ypo
+rect(2004.3+xpo,yy+0.035*scal,2024+xpo,yy-0.18*scal,col="white",border="grey50",lwd=0.8)
+repeat{
+  points(2007+xpo,yy,pch=17,col=cola[xx],cex=1.2)
+  lines(c(2005+xpo,2009+xpo),c(yy,yy),lwd=1.6,col=cola[xx],lend=1)
+  xx<-xx+1;yy=yy-(scal*0.07);if(xx>3){break}}
+xx=1;yy=range[1]+scal*ypo
+text(2016.7+xpo,yy,"1-year",col=cola[xx],cex=1.2);xx=xx+1;yy=yy-(scal*0.07)
+text(2016.7+xpo,yy,"5/1-year",col=cola[xx],cex=1.2);xx=xx+1;yy=yy-(scal*0.07)
+text(2016.7+xpo,yy,"5-year",col=cola[xx],cex=1.2);xx=xx+1;yy=yy-(scal*0.07)
+text(1974,range[2]-0.05*scal,"a",cex=2.2)
+
+##### slope plot --------------
+range<-range_c;scal=scal_c
+par(mar=c(2.5,1.4,0,0))
+
+plot(NULL,xlim=c(1971,2020),ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(1971,range[2],2020,range[1],col="grey90",border=NA)
+x<-range[1]
+repeat{
+  lines(c(1971,2020),c(x,x),col="white",lwd=0.7)
+  x=x+0.5;if(x>100){break}}
+
+x<-1980
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white",lwd=0.7)
+  x=x+10;if(x>2020){break}}
+
+xx=1
+polyg_slope(post_thyroid_den_mal_1y);xx=xx+1
+polyg_slope(post_thyroid_den_mal_cond);xx=xx+1
+polyg_slope(post_thyroid_den_mal_5y)
+
+xx=1
+slope_fit(post_thyroid_den_mal_1y);xx=xx+1
+slope_fit(post_thyroid_den_mal_cond);xx=xx+1
+slope_fit(post_thyroid_den_mal_5y)
+
+axis(2,las=2,cex.axis=1.3,at=c(seq(range[1],range[2],by=0.5)),
+     labels=c(rep("",length(seq(range[1],range[2],by=0.5)))),pos=1971,tck=tckk*2)
+axis(2,las=2,cex.axis=1.3,at=c(seq(-1,range[2],by=1)),pos=1971,tck=tckk*2)
+lines(c(1971,2020),c(0,0),col="grey50")
+
+axis(side=1,las=1,cex.axis=1.3,at=c(seq(1980,2020,by=10)),pos=range[1],labels=c(rep("",5)),tck=tckk*2)
+text(c(seq(1977.3,2020,by=20)),c(rep(range[1]-0.1*scal,5)),c(seq(1980,2020,by=20)),xpd=TRUE,cex=1.4);
+lines(c(1971,2020),c(range[1],range[1]))
+title(xlab="Year", line=1.4, cex.lab=1.4,xpd=TRUE)
+
+
+
+#### females --------------
+range<-range_b;scal=scal_b
+par(mgp=c(1.6,0.4,0))
+par(mar=c(0,1.4,0,0.3))
+
+plot(NULL,xlim=c(1971,2020),ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(1971,range[2],2020,range[1],col="grey90",border=NA)
+x<-10
+repeat{
+  lines(c(1971,2020),c(x,x),col="white",lwd=0.7)
+  x=x+10;if(x>100){break}}
+lines(c(1971,2020),c(50,50),col="white",lwd=1.7)
+
+
+x<-1980
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white",lwd=0.7)
+  x=x+10;if(x>2020){break}}
+
+# breaking points identification
+xx=1
+breakpo(post_thyroid_den_fem_1y,0)
+xx=xx+1
+breakpo(post_thyroid_den_fem_cond,1)
+xx=xx+1
+breakpo(post_thyroid_den_fem_5y,0)
+
+# 95% credible interval for survival
+xx=1
+polyg_surv(post_thyroid_den_fem_1y);xx=xx+1
+polyg_surv(post_thyroid_den_fem_cond);xx=xx+1
+polyg_surv(post_thyroid_den_fem_5y)
+
+# data points of estimated survival
+xx=1
+points(thyroid[thyroid$shou=="den_fem_",]$surv_1y~thyroid[thyroid$shou=="den_fem_",]$year
+       ,pch=17,col=colc[xx],cex=1);xx=xx+1
+points(thyroid[thyroid$shou=="den_fem_",]$surv_cond~thyroid[thyroid$shou=="den_fem_",]$year
+       ,pch=17,col=colc[xx],cex=1);xx=xx+1
+points(thyroid[thyroid$shou=="den_fem_",]$surv_5y~thyroid[thyroid$shou=="den_fem_",]$year
+       ,pch=17,col=colc[xx],cex=1)
+
+tckk=-0.016
+# fitted lines for survival
+xx=1
+surv_fit(post_thyroid_den_fem_1y);xx=xx+1
+surv_fit(post_thyroid_den_fem_cond);xx=xx+1
+surv_fit(post_thyroid_den_fem_5y);xx=xx+1
+
+axis(2,las=2,cex.axis=1.3,at=seq(range[1],range[2],by=10),
+     labels=c(rep("",length(seq(range[1],range[2],by=10)))),pos=1971,tck=tckk)
+
+axis(2,las=2,cex.axis=1.3,at=c(seq(range[1],range[2],by=20)),pos=1971,tck=tckk)
+
+axis(side=1,las=1,cex.axis=1.3,at=c(seq(1980,2020,by=10)),pos=range[1],
+     labels = c(rep("",5)),tck=tckk)
+lines(c(1971,2020),c(range[1],range[1]))
+text(1974,range[2]-0.05*scal,"e",cex=2.2)
+
+##### slope plot --------------
+range<-range_c;scal=scal_c
+par(mar=c(2.5,1.4,0,0))
+
+plot(NULL,xlim=c(1971,2020),ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(1971,range[2],2020,range[1],col="grey90",border=NA)
+x<-range[1]
+repeat{
+  lines(c(1971,2020),c(x,x),col="white",lwd=0.7)
+  x=x+0.5;if(x>100){break}}
+
+x<-1980
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white",lwd=0.7)
+  x=x+10;if(x>2020){break}}
+
+xx=1
+polyg_slope(post_thyroid_den_fem_1y);xx=xx+1
+polyg_slope(post_thyroid_den_fem_cond);xx=xx+1
+polyg_slope(post_thyroid_den_fem_5y)
+
+xx=1
+slope_fit(post_thyroid_den_fem_1y);xx=xx+1
+slope_fit(post_thyroid_den_fem_cond);xx=xx+1
+slope_fit(post_thyroid_den_fem_5y)
+
+axis(2,las=2,cex.axis=1.3,at=c(seq(range[1],range[2],by=0.5)),
+     labels=c(rep("",length(seq(range[1],range[2],by=0.5)))),pos=1971,tck=tckk*2)
+axis(2,las=2,cex.axis=1.3,at=c(seq(-1,range[2],by=1)),pos=1971,tck=tckk*2)
+lines(c(1971,2020),c(0,0),col="grey50")
+
+axis(side=1,las=1,cex.axis=1.3,at=c(seq(1980,2020,by=10)),pos=range[1],labels=c(rep("",5)),tck=tckk*2)
+text(c(seq(1977.3,2020,by=20)),c(rep(range[1]-0.1*scal,5)),c(seq(1980,2020,by=20)),xpd=TRUE,cex=1.4);
+lines(c(1971,2020),c(range[1],range[1]))
+title(xlab="Year", line=1.4, cex.lab=1.4,xpd=TRUE)
+
+
+
+
+
+
+
+### FIN  % ------------------------------------------------------
+#### males --------------
+range<-range_b;scal=scal_b
+par(mgp=c(1.6,0.4,0))
+par(mar=c(0,1.4,0,0.3))
+
+plot(NULL,xlim=c(1971,2020),ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(1971,range[2],2020,range[1],col="grey90",border=NA)
+x<-10
+repeat{
+  lines(c(1971,2020),c(x,x),col="white",lwd=0.7)
+  x=x+10;if(x>100){break}}
+lines(c(1971,2020),c(50,50),col="white",lwd=1.7)
+
+
+x<-1980
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white",lwd=0.7)
+  x=x+10;if(x>2020){break}}
+
+# breaking points identification
+xx=1
+breakpo(post_thyroid_fin_mal_1y,0)
+xx=xx+1
+breakpo(post_thyroid_fin_mal_cond,0)
+xx=xx+1
+breakpo(post_thyroid_fin_mal_5y,0)
+
+# 95% credible interval for survival
+xx=1
+polyg_surv(post_thyroid_fin_mal_1y);xx=xx+1
+polyg_surv(post_thyroid_fin_mal_cond);xx=xx+1
+polyg_surv(post_thyroid_fin_mal_5y)
+
+# data points of estimated survival
+xx=1
+points(thyroid[thyroid$shou=="fin_mal_",]$surv_1y~thyroid[thyroid$shou=="fin_mal_",]$year
+       ,pch=17,col=colc[xx],cex=1);xx=xx+1
+points(thyroid[thyroid$shou=="fin_mal_",]$surv_cond~thyroid[thyroid$shou=="fin_mal_",]$year
+       ,pch=17,col=colc[xx],cex=1);xx=xx+1
+points(thyroid[thyroid$shou=="fin_mal_",]$surv_5y~thyroid[thyroid$shou=="fin_mal_",]$year
+       ,pch=17,col=colc[xx],cex=1)
+
+tckk=-0.016
+# fitted lines for survival
+xx=1
+surv_fit(post_thyroid_fin_mal_1y);xx=xx+1
+surv_fit(post_thyroid_fin_mal_cond);xx=xx+1
+surv_fit(post_thyroid_fin_mal_5y);xx=xx+1
+
+axis(2,las=2,cex.axis=1.3,at=seq(range[1],range[2],by=10),
+     labels=c(rep("",length(seq(range[1],range[2],by=10)))),pos=1971,tck=tckk)
+
+axis(2,las=2,cex.axis=1.3,at=c(seq(range[1],range[2],by=20)),pos=1971,tck=tckk)
+
+axis(side=1,las=1,cex.axis=1.3,at=c(seq(1980,2020,by=10)),pos=range[1],
+     labels = c(rep("",5)),tck=tckk)
+lines(c(1971,2020),c(range[1],range[1]))
+
+text(1974,range[2]-0.05*scal,"b",cex=2.2)
+
+##### slope plot --------------
+range<-range_c;scal=scal_c
+par(mar=c(2.5,1.4,0,0))
+
+plot(NULL,xlim=c(1971,2020),ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(1971,range[2],2020,range[1],col="grey90",border=NA)
+x<-range[1]
+repeat{
+  lines(c(1971,2020),c(x,x),col="white",lwd=0.7)
+  x=x+0.5;if(x>100){break}}
+
+x<-1980
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white",lwd=0.7)
+  x=x+10;if(x>2020){break}}
+
+xx=1
+polyg_slope(post_thyroid_fin_mal_1y);xx=xx+1
+polyg_slope(post_thyroid_fin_mal_cond);xx=xx+1
+polyg_slope(post_thyroid_fin_mal_5y)
+
+xx=1
+slope_fit(post_thyroid_fin_mal_1y);xx=xx+1
+slope_fit(post_thyroid_fin_mal_cond);xx=xx+1
+slope_fit(post_thyroid_fin_mal_5y)
+
+axis(2,las=2,cex.axis=1.3,at=c(seq(range[1],range[2],by=0.5)),
+     labels=c(rep("",length(seq(range[1],range[2],by=0.5)))),pos=1971,tck=tckk*2)
+axis(2,las=2,cex.axis=1.3,at=c(seq(-1,range[2],by=1)),pos=1971,tck=tckk*2)
+lines(c(1971,2020),c(0,0),col="grey50")
+
+axis(side=1,las=1,cex.axis=1.3,at=c(seq(1980,2020,by=10)),pos=range[1],labels=c(rep("",5)),tck=tckk*2)
+text(c(seq(1977.3,2020,by=20)),c(rep(range[1]-0.1*scal,5)),c(seq(1980,2020,by=20)),xpd=TRUE,cex=1.4);
+lines(c(1971,2020),c(range[1],range[1]))
+title(xlab="Year", line=1.4, cex.lab=1.4,xpd=TRUE)
+
+
+
+#### females --------------
+range<-range_b;scal=scal_b
+par(mgp=c(1.6,0.4,0))
+par(mar=c(0,1.4,0,0.3))
+
+plot(NULL,xlim=c(1971,2020),ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(1971,range[2],2020,range[1],col="grey90",border=NA)
+x<-10
+repeat{
+  lines(c(1971,2020),c(x,x),col="white",lwd=0.7)
+  x=x+10;if(x>100){break}}
+lines(c(1971,2020),c(50,50),col="white",lwd=1.7)
+
+
+x<-1980
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white",lwd=0.7)
+  x=x+10;if(x>2020){break}}
+
+# breaking points identification
+xx=1
+breakpo(post_thyroid_fin_fem_1y,0)
+xx=xx+1
+breakpo(post_thyroid_fin_fem_cond,0)
+xx=xx+1
+breakpo(post_thyroid_fin_fem_5y,0)
+
+# 95% credible interval for survival
+xx=1
+polyg_surv(post_thyroid_fin_fem_1y);xx=xx+1
+polyg_surv(post_thyroid_fin_fem_cond);xx=xx+1
+polyg_surv(post_thyroid_fin_fem_5y)
+
+# data points of estimated survival
+xx=1
+points(thyroid[thyroid$shou=="fin_fem_",]$surv_1y~thyroid[thyroid$shou=="fin_fem_",]$year
+       ,pch=17,col=colc[xx],cex=1);xx=xx+1
+points(thyroid[thyroid$shou=="fin_fem_",]$surv_cond~thyroid[thyroid$shou=="fin_fem_",]$year
+       ,pch=17,col=colc[xx],cex=1);xx=xx+1
+points(thyroid[thyroid$shou=="fin_fem_",]$surv_5y~thyroid[thyroid$shou=="fin_fem_",]$year
+       ,pch=17,col=colc[xx],cex=1)
+
+tckk=-0.016
+# fitted lines for survival
+xx=1
+surv_fit(post_thyroid_fin_fem_1y);xx=xx+1
+surv_fit(post_thyroid_fin_fem_cond);xx=xx+1
+surv_fit(post_thyroid_fin_fem_5y);xx=xx+1
+
+axis(2,las=2,cex.axis=1.3,at=seq(range[1],range[2],by=10),
+     labels=c(rep("",length(seq(range[1],range[2],by=10)))),pos=1971,tck=tckk)
+
+axis(2,las=2,cex.axis=1.3,at=c(seq(range[1],range[2],by=20)),pos=1971,tck=tckk)
+
+axis(side=1,las=1,cex.axis=1.3,at=c(seq(1980,2020,by=10)),pos=range[1],
+     labels = c(rep("",5)),tck=tckk)
+lines(c(1971,2020),c(range[1],range[1]))
+text(1974,range[2]-0.05*scal,"f",cex=2.2)
+
+##### slope plot --------------
+range<-range_c;scal=scal_c
+par(mar=c(2.5,1.4,0,0))
+
+plot(NULL,xlim=c(1971,2020),ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(1971,range[2],2020,range[1],col="grey90",border=NA)
+x<-range[1]
+repeat{
+  lines(c(1971,2020),c(x,x),col="white",lwd=0.7)
+  x=x+0.5;if(x>100){break}}
+
+x<-1980
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white",lwd=0.7)
+  x=x+10;if(x>2020){break}}
+
+xx=1
+polyg_slope(post_thyroid_fin_fem_1y);xx=xx+1
+polyg_slope(post_thyroid_fin_fem_cond);xx=xx+1
+polyg_slope(post_thyroid_fin_fem_5y)
+
+xx=1
+slope_fit(post_thyroid_fin_fem_1y);xx=xx+1
+slope_fit(post_thyroid_fin_fem_cond);xx=xx+1
+slope_fit(post_thyroid_fin_fem_5y)
+
+axis(2,las=2,cex.axis=1.3,at=c(seq(range[1],range[2],by=0.5)),
+     labels=c(rep("",length(seq(range[1],range[2],by=0.5)))),pos=1971,tck=tckk*2)
+axis(2,las=2,cex.axis=1.3,at=c(seq(-1,range[2],by=1)),pos=1971,tck=tckk*2)
+lines(c(1971,2020),c(0,0),col="grey50")
+
+axis(side=1,las=1,cex.axis=1.3,at=c(seq(1980,2020,by=10)),pos=range[1],labels=c(rep("",5)),tck=tckk*2)
+text(c(seq(1977.3,2020,by=20)),c(rep(range[1]-0.1*scal,5)),c(seq(1980,2020,by=20)),xpd=TRUE,cex=1.4);
+lines(c(1971,2020),c(range[1],range[1]))
+title(xlab="Year", line=1.4, cex.lab=1.4,xpd=TRUE)
+
+
+
+
+
+
+
+### NOR  % ------------------------------------------------------
+#### males --------------
+range<-range_b;scal=scal_b
+par(mgp=c(1.6,0.4,0))
+par(mar=c(0,1.4,0,0.3))
+
+plot(NULL,xlim=c(1971,2020),ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(1971,range[2],2020,range[1],col="grey90",border=NA)
+x<-10
+repeat{
+  lines(c(1971,2020),c(x,x),col="white",lwd=0.7)
+  x=x+10;if(x>100){break}}
+lines(c(1971,2020),c(50,50),col="white",lwd=1.7)
+
+
+x<-1980
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white",lwd=0.7)
+  x=x+10;if(x>2020){break}}
+
+# breaking points identification
+xx=1
+breakpo(post_thyroid_nor_mal_1y,0)
+xx=xx+1
+breakpo(post_thyroid_nor_mal_cond,-0.6)
+xx=xx+1
+breakpo(post_thyroid_nor_mal_5y,1)
+
+# 95% credible interval for survival
+xx=1
+polyg_surv(post_thyroid_nor_mal_1y);xx=xx+1
+polyg_surv(post_thyroid_nor_mal_cond);xx=xx+1
+polyg_surv(post_thyroid_nor_mal_5y)
+
+# data points of estimated survival
+xx=1
+points(thyroid[thyroid$shou=="nor_mal_",]$surv_1y~thyroid[thyroid$shou=="nor_mal_",]$year
+       ,pch=17,col=colc[xx],cex=1);xx=xx+1
+points(thyroid[thyroid$shou=="nor_mal_",]$surv_cond~thyroid[thyroid$shou=="nor_mal_",]$year
+       ,pch=17,col=colc[xx],cex=1);xx=xx+1
+points(thyroid[thyroid$shou=="nor_mal_",]$surv_5y~thyroid[thyroid$shou=="nor_mal_",]$year
+       ,pch=17,col=colc[xx],cex=1)
+
+tckk=-0.016
+# fitted lines for survival
+xx=1
+surv_fit(post_thyroid_nor_mal_1y);xx=xx+1
+surv_fit(post_thyroid_nor_mal_cond);xx=xx+1
+surv_fit(post_thyroid_nor_mal_5y);xx=xx+1
+
+axis(2,las=2,cex.axis=1.3,at=seq(range[1],range[2],by=10),
+     labels=c(rep("",length(seq(range[1],range[2],by=10)))),pos=1971,tck=tckk)
+
+axis(2,las=2,cex.axis=1.3,at=c(seq(range[1],range[2],by=20)),pos=1971,tck=tckk)
+
+axis(side=1,las=1,cex.axis=1.3,at=c(seq(1980,2020,by=10)),pos=range[1],
+     labels = c(rep("",5)),tck=tckk)
+lines(c(1971,2020),c(range[1],range[1]))
+
+text(1974,range[2]-0.05*scal,"c",cex=2.2)
+
+##### slope plot --------------
+range<-range_c;scal=scal_c
+par(mar=c(2.5,1.4,0,0))
+
+plot(NULL,xlim=c(1971,2020),ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(1971,range[2],2020,range[1],col="grey90",border=NA)
+x<-range[1]
+repeat{
+  lines(c(1971,2020),c(x,x),col="white",lwd=0.7)
+  x=x+0.5;if(x>100){break}}
+
+x<-1980
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white",lwd=0.7)
+  x=x+10;if(x>2020){break}}
+
+xx=1
+polyg_slope(post_thyroid_nor_mal_1y);xx=xx+1
+polyg_slope(post_thyroid_nor_mal_cond);xx=xx+1
+polyg_slope(post_thyroid_nor_mal_5y)
+
+xx=1
+slope_fit(post_thyroid_nor_mal_1y);xx=xx+1
+slope_fit(post_thyroid_nor_mal_cond);xx=xx+1
+slope_fit(post_thyroid_nor_mal_5y)
+
+axis(2,las=2,cex.axis=1.3,at=c(seq(range[1],range[2],by=0.5)),
+     labels=c(rep("",length(seq(range[1],range[2],by=0.5)))),pos=1971,tck=tckk*2)
+axis(2,las=2,cex.axis=1.3,at=c(seq(-1,range[2],by=1)),pos=1971,tck=tckk*2)
+lines(c(1971,2020),c(0,0),col="grey50")
+
+axis(side=1,las=1,cex.axis=1.3,at=c(seq(1980,2020,by=10)),pos=range[1],labels=c(rep("",5)),tck=tckk*2)
+text(c(seq(1977.3,2020,by=20)),c(rep(range[1]-0.1*scal,5)),c(seq(1980,2020,by=20)),xpd=TRUE,cex=1.4);
+lines(c(1971,2020),c(range[1],range[1]))
+title(xlab="Year", line=1.4, cex.lab=1.4,xpd=TRUE)
+
+
+
+#### females --------------
+range<-range_b;scal=scal_b
+par(mgp=c(1.6,0.4,0))
+par(mar=c(0,1.4,0,0.3))
+
+plot(NULL,xlim=c(1971,2020),ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(1971,range[2],2020,range[1],col="grey90",border=NA)
+x<-10
+repeat{
+  lines(c(1971,2020),c(x,x),col="white",lwd=0.7)
+  x=x+10;if(x>100){break}}
+lines(c(1971,2020),c(50,50),col="white",lwd=1.7)
+
+
+x<-1980
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white",lwd=0.7)
+  x=x+10;if(x>2020){break}}
+
+# breaking points identification
+xx=1
+breakpo(post_thyroid_nor_fem_1y,0)
+xx=xx+1
+breakpo(post_thyroid_nor_fem_cond,0)
+xx=xx+1
+breakpo(post_thyroid_nor_fem_5y,0)
+
+# 95% credible interval for survival
+xx=1
+polyg_surv(post_thyroid_nor_fem_1y);xx=xx+1
+polyg_surv(post_thyroid_nor_fem_cond);xx=xx+1
+polyg_surv(post_thyroid_nor_fem_5y)
+
+# data points of estimated survival
+xx=1
+points(thyroid[thyroid$shou=="nor_fem_",]$surv_1y~thyroid[thyroid$shou=="nor_fem_",]$year
+       ,pch=17,col=colc[xx],cex=1);xx=xx+1
+points(thyroid[thyroid$shou=="nor_fem_",]$surv_cond~thyroid[thyroid$shou=="nor_fem_",]$year
+       ,pch=17,col=colc[xx],cex=1);xx=xx+1
+points(thyroid[thyroid$shou=="nor_fem_",]$surv_5y~thyroid[thyroid$shou=="nor_fem_",]$year
+       ,pch=17,col=colc[xx],cex=1)
+
+tckk=-0.016
+# fitted lines for survival
+xx=1
+surv_fit(post_thyroid_nor_fem_1y);xx=xx+1
+surv_fit(post_thyroid_nor_fem_cond);xx=xx+1
+surv_fit(post_thyroid_nor_fem_5y);xx=xx+1
+
+axis(2,las=2,cex.axis=1.3,at=seq(range[1],range[2],by=10),
+     labels=c(rep("",length(seq(range[1],range[2],by=10)))),pos=1971,tck=tckk)
+
+axis(2,las=2,cex.axis=1.3,at=c(seq(range[1],range[2],by=20)),pos=1971,tck=tckk)
+
+axis(side=1,las=1,cex.axis=1.3,at=c(seq(1980,2020,by=10)),pos=range[1],
+     labels = c(rep("",5)),tck=tckk)
+lines(c(1971,2020),c(range[1],range[1]))
+text(1974,range[2]-0.05*scal,"g",cex=2.2)
+
+##### slope plot --------------
+range<-range_c;scal=scal_c
+par(mar=c(2.5,1.4,0,0))
+
+plot(NULL,xlim=c(1971,2020),ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(1971,range[2],2020,range[1],col="grey90",border=NA)
+x<-range[1]
+repeat{
+  lines(c(1971,2020),c(x,x),col="white",lwd=0.7)
+  x=x+0.5;if(x>100){break}}
+
+x<-1980
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white",lwd=0.7)
+  x=x+10;if(x>2020){break}}
+
+xx=1
+polyg_slope(post_thyroid_nor_fem_1y);xx=xx+1
+polyg_slope(post_thyroid_nor_fem_cond);xx=xx+1
+polyg_slope(post_thyroid_nor_fem_5y)
+
+xx=1
+slope_fit(post_thyroid_nor_fem_1y);xx=xx+1
+slope_fit(post_thyroid_nor_fem_cond);xx=xx+1
+slope_fit(post_thyroid_nor_fem_5y)
+
+axis(2,las=2,cex.axis=1.3,at=c(seq(range[1],range[2],by=0.5)),
+     labels=c(rep("",length(seq(range[1],range[2],by=0.5)))),pos=1971,tck=tckk*2)
+axis(2,las=2,cex.axis=1.3,at=c(seq(-1,range[2],by=1)),pos=1971,tck=tckk*2)
+lines(c(1971,2020),c(0,0),col="grey50")
+
+axis(side=1,las=1,cex.axis=1.3,at=c(seq(1980,2020,by=10)),pos=range[1],labels=c(rep("",5)),tck=tckk*2)
+text(c(seq(1977.3,2020,by=20)),c(rep(range[1]-0.1*scal,5)),c(seq(1980,2020,by=20)),xpd=TRUE,cex=1.4);
+lines(c(1971,2020),c(range[1],range[1]))
+title(xlab="Year", line=1.4, cex.lab=1.4,xpd=TRUE)
+
+
+
+
+
+
+
+
+### SWE  % ------------------------------------------------------
+#### males --------------
+range<-range_b;scal=scal_b
+par(mgp=c(1.6,0.4,0))
+par(mar=c(0,1.4,0,0.3))
+
+plot(NULL,xlim=c(1971,2020),ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(1971,range[2],2020,range[1],col="grey90",border=NA)
+x<-10
+repeat{
+  lines(c(1971,2020),c(x,x),col="white",lwd=0.7)
+  x=x+10;if(x>100){break}}
+lines(c(1971,2020),c(50,50),col="white",lwd=1.7)
+
+
+x<-1980
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white",lwd=0.7)
+  x=x+10;if(x>2020){break}}
+
+# breaking points identification
+xx=1
+breakpo(post_thyroid_swe_mal_1y,0)
+xx=xx+1
+breakpo(post_thyroid_swe_mal_cond,0)
+xx=xx+1
+breakpo(post_thyroid_swe_mal_5y,0)
+
+# 95% credible interval for survival
+xx=1
+polyg_surv(post_thyroid_swe_mal_1y);xx=xx+1
+polyg_surv(post_thyroid_swe_mal_cond);xx=xx+1
+polyg_surv(post_thyroid_swe_mal_5y)
+
+# data points of estimated survival
+xx=1
+points(thyroid[thyroid$shou=="swe_mal_",]$surv_1y~thyroid[thyroid$shou=="swe_mal_",]$year
+       ,pch=17,col=colc[xx],cex=1);xx=xx+1
+points(thyroid[thyroid$shou=="swe_mal_",]$surv_cond~thyroid[thyroid$shou=="swe_mal_",]$year
+       ,pch=17,col=colc[xx],cex=1);xx=xx+1
+points(thyroid[thyroid$shou=="swe_mal_",]$surv_5y~thyroid[thyroid$shou=="swe_mal_",]$year
+       ,pch=17,col=colc[xx],cex=1)
+
+tckk=-0.016
+# fitted lines for survival
+xx=1
+surv_fit(post_thyroid_swe_mal_1y);xx=xx+1
+surv_fit(post_thyroid_swe_mal_cond);xx=xx+1
+surv_fit(post_thyroid_swe_mal_5y);xx=xx+1
+
+axis(2,las=2,cex.axis=1.3,at=seq(range[1],range[2],by=10),
+     labels=c(rep("",length(seq(range[1],range[2],by=10)))),pos=1971,tck=tckk)
+
+axis(2,las=2,cex.axis=1.3,at=c(seq(range[1],range[2],by=20)),pos=1971,tck=tckk)
+
+axis(side=1,las=1,cex.axis=1.3,at=c(seq(1980,2020,by=10)),pos=range[1],
+     labels = c(rep("",5)),tck=tckk)
+lines(c(1971,2020),c(range[1],range[1]))
+
+text(1974,range[2]-0.05*scal,"d",cex=2.2)
+
+##### slope plot --------------
+range<-range_c;scal=scal_c
+par(mar=c(2.5,1.4,0,0))
+
+plot(NULL,xlim=c(1971,2020),ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(1971,range[2],2020,range[1],col="grey90",border=NA)
+x<-range[1]
+repeat{
+  lines(c(1971,2020),c(x,x),col="white",lwd=0.7)
+  x=x+0.5;if(x>100){break}}
+
+x<-1980
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white",lwd=0.7)
+  x=x+10;if(x>2020){break}}
+
+xx=1
+polyg_slope(post_thyroid_swe_mal_1y);xx=xx+1
+polyg_slope(post_thyroid_swe_mal_cond);xx=xx+1
+polyg_slope(post_thyroid_swe_mal_5y)
+
+xx=1
+slope_fit(post_thyroid_swe_mal_1y);xx=xx+1
+slope_fit(post_thyroid_swe_mal_cond);xx=xx+1
+slope_fit(post_thyroid_swe_mal_5y)
+
+axis(2,las=2,cex.axis=1.3,at=c(seq(range[1],range[2],by=0.5)),
+     labels=c(rep("",length(seq(range[1],range[2],by=0.5)))),pos=1971,tck=tckk*2)
+axis(2,las=2,cex.axis=1.3,at=c(seq(-1,range[2],by=1)),pos=1971,tck=tckk*2)
+lines(c(1971,2020),c(0,0),col="grey50")
+
+axis(side=1,las=1,cex.axis=1.3,at=c(seq(1980,2020,by=10)),pos=range[1],labels=c(rep("",5)),tck=tckk*2)
+text(c(seq(1977.3,2020,by=20)),c(rep(range[1]-0.1*scal,5)),c(seq(1980,2020,by=20)),xpd=TRUE,cex=1.4);
+lines(c(1971,2020),c(range[1],range[1]))
+title(xlab="Year", line=1.4, cex.lab=1.4,xpd=TRUE)
+
+
+
+#### females --------------
+range<-range_b;scal=scal_b
+par(mgp=c(1.6,0.4,0))
+par(mar=c(0,1.4,0,0.3))
+
+plot(NULL,xlim=c(1971,2020),ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(1971,range[2],2020,range[1],col="grey90",border=NA)
+x<-10
+repeat{
+  lines(c(1971,2020),c(x,x),col="white",lwd=0.7)
+  x=x+10;if(x>100){break}}
+lines(c(1971,2020),c(50,50),col="white",lwd=1.7)
+
+
+x<-1980
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white",lwd=0.7)
+  x=x+10;if(x>2020){break}}
+
+# breaking points identification
+xx=1
+breakpo(post_thyroid_swe_fem_1y,0)
+xx=xx+1
+breakpo(post_thyroid_swe_fem_cond,0.6)
+xx=xx+1
+breakpo(post_thyroid_swe_fem_5y,-0.6)
+
+# 95% credible interval for survival
+xx=1
+polyg_surv(post_thyroid_swe_fem_1y);xx=xx+1
+polyg_surv(post_thyroid_swe_fem_cond);xx=xx+1
+polyg_surv(post_thyroid_swe_fem_5y)
+
+# data points of estimated survival
+xx=1
+points(thyroid[thyroid$shou=="swe_fem_",]$surv_1y~thyroid[thyroid$shou=="swe_fem_",]$year
+       ,pch=17,col=colc[xx],cex=1);xx=xx+1
+points(thyroid[thyroid$shou=="swe_fem_",]$surv_cond~thyroid[thyroid$shou=="swe_fem_",]$year
+       ,pch=17,col=colc[xx],cex=1);xx=xx+1
+points(thyroid[thyroid$shou=="swe_fem_",]$surv_5y~thyroid[thyroid$shou=="swe_fem_",]$year
+       ,pch=17,col=colc[xx],cex=1)
+
+tckk=-0.016
+# fitted lines for survival
+xx=1
+surv_fit(post_thyroid_swe_fem_1y);xx=xx+1
+surv_fit(post_thyroid_swe_fem_cond);xx=xx+1
+surv_fit(post_thyroid_swe_fem_5y);xx=xx+1
+
+axis(2,las=2,cex.axis=1.3,at=seq(range[1],range[2],by=10),
+     labels=c(rep("",length(seq(range[1],range[2],by=10)))),pos=1971,tck=tckk)
+
+axis(2,las=2,cex.axis=1.3,at=c(seq(range[1],range[2],by=20)),pos=1971,tck=tckk)
+
+axis(side=1,las=1,cex.axis=1.3,at=c(seq(1980,2020,by=10)),pos=range[1],
+     labels = c(rep("",5)),tck=tckk)
+lines(c(1971,2020),c(range[1],range[1]))
+text(1974,range[2]-0.05*scal,"h",cex=2.2)
+
+##### slope plot --------------
+range<-range_c;scal=scal_c
+par(mar=c(2.5,1.4,0,0))
+
+plot(NULL,xlim=c(1971,2020),ylim=c(range[1],range[2]),xlab="",ylab=""
+     ,las=1, axes=FALSE)
+rect(1971,range[2],2020,range[1],col="grey90",border=NA)
+x<-range[1]
+repeat{
+  lines(c(1971,2020),c(x,x),col="white",lwd=0.7)
+  x=x+0.5;if(x>100){break}}
+
+x<-1980
+repeat{
+  lines(c(x,x),c(range[1],range[2]),col="white",lwd=0.7)
+  x=x+10;if(x>2020){break}}
+
+xx=1
+polyg_slope(post_thyroid_swe_fem_1y);xx=xx+1
+polyg_slope(post_thyroid_swe_fem_cond);xx=xx+1
+polyg_slope(post_thyroid_swe_fem_5y)
+
+xx=1
+slope_fit(post_thyroid_swe_fem_1y);xx=xx+1
+slope_fit(post_thyroid_swe_fem_cond);xx=xx+1
+slope_fit(post_thyroid_swe_fem_5y)
+
+axis(2,las=2,cex.axis=1.3,at=c(seq(range[1],range[2],by=0.5)),
+     labels=c(rep("",length(seq(range[1],range[2],by=0.5)))),pos=1971,tck=tckk*2)
+axis(2,las=2,cex.axis=1.3,at=c(seq(-1,range[2],by=1)),pos=1971,tck=tckk*2)
+lines(c(1971,2020),c(0,0),col="grey50")
+
+axis(side=1,las=1,cex.axis=1.3,at=c(seq(1980,2020,by=10)),pos=range[1],labels=c(rep("",5)),tck=tckk*2)
+text(c(seq(1977.3,2020,by=20)),c(rep(range[1]-0.1*scal,5)),c(seq(1980,2020,by=20)),xpd=TRUE,cex=1.4);
+lines(c(1971,2020),c(range[1],range[1]))
+title(xlab="Year", line=1.4, cex.lab=1.4,xpd=TRUE)
+```
+
+# Reproducibility
+
+```{r}
+sessionInfo()
+```
